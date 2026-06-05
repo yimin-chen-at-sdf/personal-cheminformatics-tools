@@ -1,11 +1,37 @@
 """
-Comments to be added
+This script performs geometry optimization with OrbMol-v2. This script relies 
+on ase (Atomic Simulation Environment) and orb-models. The user supplies an 
+input.xyz and the result of geometry optimization with be input_opt.xyz. If you
+choose to preserve the process of geometry optimization with the "-t" argument,
+an input_trj.xyz will be produced as well. If you use CPU to run the 
+calculations, do not forget to set OMP_NUM_THREADS and MKL_NUM_THREADS 
+environment variables prior to running this script, otherwise the optimization 
+process can be very slow. The check point file can be obtained from 
+https://huggingface.co/Orbital-Materials/orbmol-v2/tree/main prior to running 
+calculations.
+
+Optimize a neutral closed-shell molecule:
+  python orbmol-v2_opt.py -d cpu -i input.xyz
+Use a predownloaded check point file to optimize a neutral closed-shell 
+molecule:
+  python orbmol-v2_opt.py -d cpu -w /path/to/check/point/file -i input.xyz
+Optimize a closed-shell molecule with +1 charge
+  python orbmol-v2_opt.py -d cpu -i input.xyz -c 1
+Optimize a neutral radical species (S = 1/2, 2S + 1 = 2):
+  python orbmol-v2_opt.py -d cpu -i input.xyz -m 2
+Optimize a neutral closed-shell molecule and preserve the process of geometry 
+optimization:
+  python orbmol-v2_opt.py -d cpu -i input.xyz -t
+Use NVIDIA GPU rather than CPU to optimize a neutral closed-shell molecule:
+  python orbmol-v2_opt.py -d cuda -i input.xyz
+Optimize a neutral closed-shell molecule with the precision being float32-
+highest instead of the default float32-high:
+  python orbmol-v2_opt.py -d cpu -p float32-highest -i input.xyz
 """
 
 import os
 import argparse
 from pathlib import Path
-import ase
 from ase.io import read, write
 from ase.optimize import BFGS
 from orb_models.forcefield import pretrained
@@ -24,7 +50,7 @@ def parse_args():
 
 def resolve_weights(weights_arg):
     if weights_arg is None:
-        print("No --weights or -w argument provided. The program might need to download check point file.")
+        print("No --weights or -w argument is provided. The program might need to download check point file.")
         return None
 
     weights_path = Path(weights_arg)
@@ -50,24 +76,29 @@ def notify_user(args):
     opt_path = output_dir / opt_filename
     return input_path, opt_path, weights_path
 
+def set_calculator(device, precision, weights_path):
+    if weights_path is None:
+        orbff, atoms_adapter = pretrained.orbmol_v2(device=device, precision=precision)
+    else:
+        orbff, atoms_adapter = pretrained.orbmol_v2(weights_path=weights_path, device=device, precision=precision)
+    return ORBCalculator(orbff, atoms_adapter=atoms_adapter, device=device)
+
+def set_atoms(input_path, charge, multiplicity, calc):
+    atoms = read(input_path)
+    atoms.info["charge"] = charge
+    atoms.info["spin"] = multiplicity
+    atoms.calc = calc
+    return atoms
+
 def main():
     args = parse_args()
     input_path, opt_path, weights_path = notify_user(args)
-    device = args.device
-    if weights_path is None:
-        orbff, atoms_adapter = pretrained.orbmol_v2(device=device, precision=args.precision)
-    else:
-        orbff, atoms_adapter = pretrained.orbmol_v2(weights_path=weights_path, device=device, precision=args.precision)
-    calc = ORBCalculator(orbff, atoms_adapter=atoms_adapter, device=device)
-
-    atoms=read(input_path)
-    atoms.info["charge"] = args.charge
-    atoms.info["spin"] = args.multiplicity
-    atoms.calc = calc
+    calc = set_calculator(args.device, args.precision, weights_path)
+    atoms = set_atoms(input_path, args.charge, args.multiplicity, calc)
 
     if args.trajectory:
         trj_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_trj.xyz")
-        intermediate_path = opt_path.with_name("orb_optimized.traj")
+        intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
         dyn = BFGS(atoms, trajectory=intermediate_path)
         dyn.run(fmax=0.01)
         write(opt_path, atoms)
