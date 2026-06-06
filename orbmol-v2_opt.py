@@ -53,7 +53,7 @@ def resolve_weights(weights_arg):
         print("No --weights or -w argument is provided. The program might need to download check point file.")
         return None
 
-    weights_path = Path(weights_arg)
+    weights_path = Path(weights_arg).resolve()
 
     if not weights_path.is_file():
         print(f"Error: invalid checkpoint file path: {weights_path}", file=sys.stderr)
