@@ -33,7 +33,7 @@ import os
 import argparse
 from pathlib import Path
 from ase.io import read, write
-from ase.optimize import BFGS
+from sella import Sella
 from orb_models.forcefield import pretrained
 from orb_models.forcefield.inference.calculator import ORBCalculator
 
@@ -99,15 +99,15 @@ def main():
     if args.trajectory:
         trj_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_trj.xyz")
         intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
-        dyn = BFGS(atoms, trajectory=intermediate_path)
-        dyn.run(fmax=0.01)
+        dyn = Sella(atoms, order=0, internal=True, trajectory=os.fspath(intermediate_path))
+        dyn.run(1e-3, 1000)
         write(opt_path, atoms)
         images = read(intermediate_path, index=":")
         write(trj_path, images)
         intermediate_path.unlink(missing_ok=True)
     else:
-        dyn = dyn = BFGS(atoms)
-        dyn.run(fmax=0.01)
+        dyn = Sella(atoms, order=0, internal=True)
+        dyn.run(1e-3, 1000)
         write(opt_path, atoms)
 
 if __name__ == "__main__":
