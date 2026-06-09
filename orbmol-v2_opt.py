@@ -32,6 +32,8 @@ highest instead of the default float32-high:
 import os
 import argparse
 from pathlib import Path
+import csv
+import numpy as np
 from ase.io import read, write
 from sella import Sella
 from orb_models.forcefield import pretrained
@@ -46,6 +48,9 @@ def parse_args():
     parser.add_argument("--charge", "-c", default=0, type=int, help="Net charge of the molecule with the default value being zero")
     parser.add_argument("--multiplicity", "-m", default=1, type=int, help="Multiplicity of the molecule with the default value being one")
     parser.add_argument("--trajectory", "-t", action="store_true", help="Once this option is specified, trajectory of geometry optimization will be outputted")
+    parser.add_argument("--export_csv", "-e", action="store_true", help="Once this option is specified, a csv file about geometry optimization will be outputted")
+    parser.add_argument("--fmax", type=float, default=0.01, help="Threshold for maximum force acting on any atom of the system under investigation with the default value being 0.01")
+    parser.add_argument("--maxcycles", type=int, default=1000, help="Maximum steps of geometry optimization with the default value being 1000")
     return parser.parse_args()
 
 def resolve_weights(weights_arg):
@@ -90,25 +95,68 @@ def set_atoms(input_path, charge, multiplicity, calc):
     atoms.calc = calc
     return atoms
 
+def extract_energies_and_fmax(traj_path):
+    frames = read(traj_path, index=":")
+    energies = []
+    fmax_list = []
+
+    for atoms in frames:
+        energy = atoms.get_potential_energy()
+        forces = atoms.get_forces()
+        fmax = float(np.linalg.norm(forces, axis=1).max())
+
+        energies.append(float(energy))
+        fmax_list.append(fmax)
+
+    return energies, fmax_list
+
+def run_continuous_optimization(atoms, input_path, opt_path, output_trajectory, fmax, maxcycles):
+    intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
+    opt = Sella(atoms, order=0, internal=True, trajectory=os.fspath(intermediate_path))
+    opt.run(fmax=fmax, steps=maxcycles)
+    write(opt_path, atoms)
+    energies, fmax_list = extract_energies_and_fmax(intermediate_path)
+    last_energy = None
+    dE = []
+    for energy in energies:
+        if last_energy is None:
+            energy_change = "N/A"
+        else:
+            energy_change = float(energy - last_energy)
+        dE.append(energy_change)
+        last_energy = energy
+    if output_trajectory:
+        trj_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_trj.xyz")
+        images = read(intermediate_path, index=":")
+        write(trj_path, images)
+    intermediate_path.unlink(missing_ok=True)
+    return dE, fmax_list
+
+def initialize_csv(csv_path):
+    with open(csv_path, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["number", "dE", "fmax"])
+
+
+def write_csv(start_step, dE_block, fmax_block, csv_path):
+    with open(csv_path, "a", newline="") as file:
+        writer = csv.writer(file)
+        for i, (de, fmax) in enumerate(zip(dE_block, fmax_block)):
+            de_out = de if de == "N/A" else f"{de:.8f}"
+            fmax_out = f"{fmax:.8f}"
+            writer.writerow([start_step + i, de_out, fmax_out])
+
 def main():
     args = parse_args()
     input_path, opt_path, weights_path = notify_user(args)
     calc = set_calculator(args.device, args.precision, weights_path)
     atoms = set_atoms(input_path, args.charge, args.multiplicity, calc)
 
-    if args.trajectory:
-        trj_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_trj.xyz")
-        intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
-        dyn = Sella(atoms, order=0, internal=True, trajectory=os.fspath(intermediate_path))
-        dyn.run(1e-3, 1000)
-        write(opt_path, atoms)
-        images = read(intermediate_path, index=":")
-        write(trj_path, images)
-        intermediate_path.unlink(missing_ok=True)
-    else:
-        dyn = Sella(atoms, order=0, internal=True)
-        dyn.run(1e-3, 1000)
-        write(opt_path, atoms)
+    dE, fmax_list = run_continuous_optimization(atoms, input_path, opt_path, args.trajectory, args.fmax, args.maxcycles)
+    if args.export_csv:
+        csv_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.csv")
+        initialize_csv(csv_path)
+        write_csv(0, dE, fmax_list, csv_path)
 
 if __name__ == "__main__":
     main()
