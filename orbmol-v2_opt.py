@@ -228,7 +228,7 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
             dE_block.append(de)
             last_energy = energy
         fmax_history.extend(fmax_block)
-        
+
         if output_trajectory:
             base = opt_path.stem.removesuffix("_opt")
             trj_path = opt_path.with_name(f"{base}_trj_{iblock:04d}.xyz")
