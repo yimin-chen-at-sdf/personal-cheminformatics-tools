@@ -80,6 +80,8 @@ def apply_defaults_in_consecutive_optimization(args):
 def validate_values(args, parser):
     if args.maxcycles <= 0:
         parser.error("--maxcycles must be greater than 0")
+    if args.steps_per_block <= 1:
+        parser.error("--steps_per_block must be greater than 1")
     if args.steps_per_block >= args.maxcycles:
         parser.error("--steps_per_block must be smaller than --maxcycles")
     if args.energy_change_threshold <= 0:
@@ -135,7 +137,7 @@ def set_calculator(device, precision, weights_path):
     return ORBCalculator(orbff, atoms_adapter=atoms_adapter, device=device)
 
 def set_atoms(input_path, charge, multiplicity, calc):
-    atoms = read(input_path)
+    atoms = read(input_path, format='xyz')
     atoms.info["charge"] = charge
     atoms.info["spin"] = multiplicity
     atoms.calc = calc
@@ -261,7 +263,7 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
             break
     if output_trajectory:
         combine_xyz_files(opt_path, iblock)
-    write(opt_path, atoms)
+    write(opt_path, atoms, format='xyz')
     return dE, fmax_history, last_energy
 
 def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_threshold, maxcycles):
@@ -285,7 +287,7 @@ def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_thr
         images = read(intermediate_path, index=":")
         write(trj_path, images)
     intermediate_path.unlink(missing_ok=True)
-    write(opt_path, atoms)
+    write(opt_path, atoms, format='xyz')
     return dE, fmax_list, last_energy
 
 def main():
@@ -300,14 +302,15 @@ def main():
             nblocks += 1
         dE, fmax_history, last_energy = perform_consecutive_optimization(atoms, opt_path, args.trajectory, args.fmax_threshold, args.steps_per_block, nblocks, args.export_csv, args.energy_change_threshold, args.nde_check)
         steps = len(fmax_history) - 1
+        print(f"The final energy is {last_energy:.8f} after {steps} steps of consecutive geometry optimization.")
     else:
         dE, fmax_list, last_energy = perform_continuous_optimization(atoms, opt_path, args.trajectory, args.fmax_threshold, args.maxcycles)
         steps = len(fmax_list) - 1
+        print(f"The final energy is {last_energy:.8f} after {steps} steps of continuous geometry optimization.")
         if args.export_csv:
             csv_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.csv")
             initialize_csv(csv_path)
             write_csv(0, dE, fmax_list, csv_path)
-    print(f"The final energy is {last_energy:.8f} after {steps} steps of geometry optimization.")
 
 if __name__ == "__main__":
     main()
