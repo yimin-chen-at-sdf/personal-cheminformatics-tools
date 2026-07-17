@@ -1,17 +1,24 @@
 """
 This script performs geometry optimization with OrbMol-v2. This script relies 
-on ase (Atomic Simulation Environment) and orb-models. The user supplies an 
-input.xyz and the result of geometry optimization with be input_opt.xyz. If you
-choose to preserve the process of geometry optimization with the "-t" argument,
-an input_trj.xyz will be produced as well. If you use CPU to run the 
-calculations, do not forget to set OMP_NUM_THREADS and MKL_NUM_THREADS 
-environment variables prior to running this script, otherwise the optimization 
-process can be very slow. The check point file can be obtained from 
+on ase (Atomic Simulation Environment), orb-models, and sella. The user 
+supplies an input.xyz and the result of geometry optimization will be 
+input_opt.xyz. If the user chooses to preserve the process of geometry 
+optimization with the "-t" argument, an input_trj.xyz will be produced as well.
+If the user uses CPU to run the calculations, OMP_NUM_THREADS and 
+MKL_NUM_THREADS environment variables should be set prior to running this 
+script, otherwise the optimization process can be very slow. The check point 
+file can be obtained from 
 https://huggingface.co/Orbital-Materials/orbmol-v2/tree/main prior to running 
 calculations.
 
 Optimize a neutral closed-shell molecule:
   python orbmol-v2_opt.py -d cpu -i input.xyz
+Optimize a neutral closed-shell molecule and preserve the process of geometry 
+optimization:
+  python orbmol-v2_opt.py -d cpu -i input.xyz -t
+Optimize a neutral closed-shell molecule and export a csv file about the 
+process of geometry optimization:
+  python orbmol-v2_opt.py -d cpu -i input.xyz -e
 Use a predownloaded check point file to optimize a neutral closed-shell 
 molecule:
   python orbmol-v2_opt.py -d cpu -w /path/to/check/point/file -i input.xyz
@@ -19,25 +26,84 @@ Optimize a closed-shell molecule with +1 charge
   python orbmol-v2_opt.py -d cpu -i input.xyz -c 1
 Optimize a neutral radical species (S = 1/2, 2S + 1 = 2):
   python orbmol-v2_opt.py -d cpu -i input.xyz -m 2
-Optimize a neutral closed-shell molecule and preserve the process of geometry 
-optimization:
-  python orbmol-v2_opt.py -d cpu -i input.xyz -t
 Use NVIDIA GPU rather than CPU to optimize a neutral closed-shell molecule:
   python orbmol-v2_opt.py -d cuda -i input.xyz
 Optimize a neutral closed-shell molecule with the precision being float32-
 highest instead of the default float32-high:
   python orbmol-v2_opt.py -d cpu -p float32-highest -i input.xyz
+Optimize a neutral closed-shell molecule and change the threshold for maximum 
+force acting on any atom to 0.02:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --fmax_threshold 0.02
+Optimize a neutral closed-shell molecule and change maximum steps of geometry 
+optimization to 250:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --maxcycles 250
+Use an experimental feature to optimize a neutral closed-shell molecule with 
+several blocks of geometry optimization:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --run_consecutive_optimization
+
+Advanced usage with constraints:
+When any constraint is specified, the process of geometry optimization will be 
+preserved by default. Only one-based indexing of atoms is allowed when 
+sepecifying constraints.
+Constrain the bond between atom 1 and atom 2:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2
+Constrain the bond between atom 1 and atom 2 to 1.5 Angstrom:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2 --target 1.5
+NOTE: The command above does not change the geometry immediately.
+Constrain the bond between atom 1 and atom 2 along with the bond between atom 7
+and atom 8:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2 7 8
+Constrain the bond between atom 1 and atom 2 while constrain the bond between 
+atom 7 and atomm 8 to 1.5 Angstrom:
+  python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2 7 8 --target C 1.5
+NOTE: The command above does not change the geometry immediately.
 """
 
 import os
+import platform
 import argparse
 from pathlib import Path
 import csv
 import numpy as np
 from ase.io import read, write
-from sella import Sella
+from sella import Sella, Constraints
 from orb_models.forcefield import pretrained
 from orb_models.forcefield.inference.calculator import ORBCalculator
+
+def positive_int(value: str) -> int:
+    """Convert a command-line value to a positive integer."""
+    try:
+        value = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not an integer"
+        )
+
+    if value <= 0:
+        raise argparse.ArgumentTypeError(
+            f"{value} is not a positive integer"
+        )
+
+    return value
+
+
+def target_value(value: str):
+    """
+    Accept either 'C' or a floating-point target value.
+
+    Returns:
+        'C' for a bond length retaining current value
+        float for an explicitly specified bond length
+    """
+    if value == "C":
+        return "C"
+
+    try:
+        return float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} must be 'C' or a floating-point number"
+        )
 
 def build_parser():
     parser = argparse.ArgumentParser(usage=__doc__)
@@ -55,6 +121,8 @@ def build_parser():
     parser.add_argument("--steps_per_block", type=int, default=argparse.SUPPRESS, help="The number of steps per block for running consecutive geometry optimization with the default value being 10")
     parser.add_argument("--energy_change_threshold", type=float, default=argparse.SUPPRESS, help="Threshold for energy change in consecutive geometry optimization with the default value being 3e-5")
     parser.add_argument("--nde_check", type=int, default=argparse.SUPPRESS, help="Number of steps involved in checking energy change in one block of calculation in consecutive geometry optimization with the default value being 3")
+    parser.add_argument("--fix_bond", nargs="+", type=positive_int, help="Atom-index pairs for fixed bonds, e.g. --fix_bond 1 2 8 7. One-based indexing should be used")
+    parser.add_argument("--target", nargs="+", type=target_value, default=argparse.SUPPRESS, help="One target per fixed bond: C or a floating-point value. Here C means constant value")
     return parser
 
 def validate_dependencies_in_consecutive_optimization(args, parser):
@@ -91,6 +159,32 @@ def validate_values(args, parser):
     if args.nde_check > args.steps_per_block:
         parser.error("--nde_check must be smaller than or equal to --steps_per_block")
 
+def constraints(args, parser):
+    """Validate and convert constraint-related arguments."""
+    has_fix_bond = args.fix_bond is not None
+    has_target = hasattr(args, "target")
+
+    # --target requires --fix_bond.
+    if has_target and not has_fix_bond:
+        parser.error("--target can only be specified together with --fix_bond")
+
+    # No --fix_bond: leave it as None.
+    if not has_fix_bond:
+        return args
+
+    # --fix_bond must contain complete atom pairs.
+    if len(args.fix_bond) % 2 != 0:
+        parser.error("The last atom does not have bond specified")
+
+    # [1, 2, 8, 7] -> [(1, 2), (8, 7)]
+    args.fix_bond = list(zip(args.fix_bond[::2], args.fix_bond[1::2]))
+
+    # One --target input is required for every fixed-bond pair.
+    if has_target and len(args.target) != len(args.fix_bond):
+        parser.error("The number of --target values must equal the number of fixed bonds")
+
+    return args
+
 def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -98,6 +192,7 @@ def parse_args(argv=None):
     validate_dependencies_in_consecutive_optimization(args, parser)
     apply_defaults_in_consecutive_optimization(args)
     validate_values(args, parser)
+    args = constraints(args, parser)
 
     return args
 
@@ -128,6 +223,28 @@ def notify_user(args):
     opt_filename = f"{input_path.stem}_opt{input_path.suffix}"
     opt_path = output_dir / opt_filename
     return input_path, opt_path, weights_path
+
+def check_cpu_environment():
+    """Report Linux status and OpenMP/MKL thread-variable status."""
+    if platform.system() != "Linux":
+        print("The operating system is not Linux.")
+        return
+    print("The operating system is Linux.")
+    omp_num_threads = os.environ.get("OMP_NUM_THREADS")
+    mkl_num_threads = os.environ.get("MKL_NUM_THREADS")
+    if omp_num_threads is None:
+        print("The OMP_NUM_THREADS environment variable has not been set.")
+    else:
+        print("The OMP_NUM_THREADS environment variable has been set.")
+    if mkl_num_threads is None:
+        print("The MKL_NUM_THREADS environment variable has not been set.")
+    else:
+        print("The MKL_NUM_THREADS environment variable has been set.")
+    if omp_num_threads is not None and mkl_num_threads is not None:
+        if omp_num_threads == mkl_num_threads:
+            print("They are equal to each other.")
+        else:
+            print("They are not equal to each other.")
 
 def set_calculator(device, precision, weights_path):
     if weights_path is None:
@@ -293,6 +410,8 @@ def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_thr
 def main():
     args = parse_args()
     input_path, opt_path, weights_path = notify_user(args)
+    if args.device == "cpu":
+        check_cpu_environment()
     calc = set_calculator(args.device, args.precision, weights_path)
     atoms = set_atoms(input_path, args.charge, args.multiplicity, calc)
 
