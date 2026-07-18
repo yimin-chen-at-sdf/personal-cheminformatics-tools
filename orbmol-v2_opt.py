@@ -70,26 +70,33 @@ from sella import Sella, Constraints
 from orb_models.forcefield import pretrained
 from orb_models.forcefield.inference.calculator import ORBCalculator
 
-def positive_int(value: str) -> int:
-    """Convert a command-line value to a positive integer."""
+def positive_int(value):
+    """
+    Custom type function to validate positive integers.
+
+    Args:
+      value (str): One-based indexing of atom
+
+    Returns:
+      int
+    """
     try:
         value = int(value)
     except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"{value!r} is not an integer"
-        )
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer")
 
     if value <= 0:
-        raise argparse.ArgumentTypeError(
-            f"{value} is not a positive integer"
-        )
+        raise argparse.ArgumentTypeError(f"{value} is not a positive integer")
 
     return value
 
 
-def target_value(value: str):
+def target_value(value):
     """
     Accept either 'C' or a floating-point target value.
+
+    Args:
+      value (str): 'C' or bond length
 
     Returns:
         'C' for a bond length retaining current value
@@ -240,7 +247,9 @@ def check_cpu_environment():
         print("The MKL_NUM_THREADS environment variable has not been set.")
     else:
         print("The MKL_NUM_THREADS environment variable has been set.")
-    if omp_num_threads is not None and mkl_num_threads is not None:
+    if omp_num_threads is None and mkl_num_threads is None:
+        print("This can slow down the calculations in the next step. You are supposed to stop the program, set the two environment variables, and rerun the program.")
+    elif omp_num_threads is not None and mkl_num_threads is not None:
         if omp_num_threads == mkl_num_threads:
             print("They are equal to each other.")
         else:
