@@ -41,10 +41,10 @@ Use an experimental feature to optimize a neutral closed-shell molecule with
 several blocks of geometry optimization:
   python orbmol-v2_opt.py -d cpu -i input.xyz --run_consecutive_optimization
 
-Advanced usage with constraints:
-When any constraint is specified, the process of geometry optimization will be 
-preserved by default. Only one-based indexing of atoms is allowed when 
-sepecifying constraints.
+Advanced usage with bond constraints:
+When any bond constraint is specified, the process of geometry optimization 
+will be preserved by default. Only one-based indexing of atoms is allowed when 
+sepecifying bond constraints.
 Constrain the bond between atom 1 and atom 2:
   python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2
 Constrain the bond between atom 1 and atom 2 to 1.5 Angstrom:
@@ -120,16 +120,16 @@ def build_parser():
     parser.add_argument("--input", "-i", required=True, type=str, help="Path of the input xyz file")
     parser.add_argument("--charge", "-c", default=0, type=int, help="Net charge of the molecule with the default value being zero")
     parser.add_argument("--multiplicity", "-m", default=1, type=int, help="Multiplicity of the molecule with the default value being one")
-    parser.add_argument("--trajectory", "-t", action="store_true", help="Once this option is specified, trajectory of geometry optimization will be outputted")
+    parser.add_argument("--trajectory", "-t", action="store_true", help="Once this option is specified, trajectory of geometry optimization will be outputted. If the user enforces constraint on some bond, trajectory of geometry optimization will be outputted by default even without specifying this option.")
     parser.add_argument("--export_csv", "-e", action="store_true", help="Once this option is specified, a csv file about geometry optimization will be outputted")
-    parser.add_argument("--fmax_threshold", type=float, default=0.01, help="Threshold for maximum force acting on any atom of the system under investigation with the default value being 0.01")
-    parser.add_argument("--maxcycles", type=int, default=1000, help="Maximum steps of geometry optimization with the default value being 1000")
+    parser.add_argument("--fmax_threshold", type=float, default=0.01, help="Threshold for maximum force acting on any atom of the system under investigation with the default value being 0.01. However, during geometry optimization with bond constraint, the default value will be 1e-3 and cannot be changed without editing the codes.")
+    parser.add_argument("--maxcycles", type=int, default=1000, help="Maximum steps of geometry optimization with the default value being 1000. However, during geometry optimization with bond constraint, the default value will be 300 and cannot be changed without editing the codes.")
     parser.add_argument("--run_consecutive_optimization", action="store_true", help="Once this option is specified, consecutive geometry optimization will be performed, which consists of several blocks")
     parser.add_argument("--steps_per_block", type=int, default=argparse.SUPPRESS, help="The number of steps per block for running consecutive geometry optimization with the default value being 10")
     parser.add_argument("--energy_change_threshold", type=float, default=argparse.SUPPRESS, help="Threshold for energy change in consecutive geometry optimization with the default value being 3e-5")
     parser.add_argument("--nde_check", type=int, default=argparse.SUPPRESS, help="Number of steps involved in checking energy change in one block of calculation in consecutive geometry optimization with the default value being 3")
-    parser.add_argument("--fix_bond", nargs="+", type=positive_int, help="Atom-index pairs for fixed bonds, e.g. --fix_bond 1 2 8 7. One-based indexing should be used")
-    parser.add_argument("--target", nargs="+", type=target_value, default=argparse.SUPPRESS, help="One target per fixed bond: C or a floating-point value. Here C means constant value")
+    parser.add_argument("--fix_bond", nargs="+", type=positive_int, help="Atom-index pairs for fixed bonds, e.g. --fix_bond 1 2 8 7. One-based indexing should be used.")
+    parser.add_argument("--target", nargs="+", type=target_value, default=argparse.SUPPRESS, help="One target per fixed bond: C or a floating-point value. Here C means constant value. The unit or dimension here is Angstrom.")
     return parser
 
 def validate_dependencies_in_consecutive_optimization(args, parser):
@@ -171,11 +171,12 @@ def constraints(args, parser):
     has_fix_bond = args.fix_bond is not None
     has_target = hasattr(args, "target")
 
-    # --target requires --fix_bond.
+    # The user cannot supply "--target" argument without supply "--fix_bond" 
+    # argument.
     if has_target and not has_fix_bond:
         parser.error("--target can only be specified together with --fix_bond")
 
-    # No --fix_bond: leave it as None.
+    # The user does not supply any "--fix_bond" argument.
     if not has_fix_bond:
         return args
 
@@ -186,7 +187,7 @@ def constraints(args, parser):
     # [1, 2, 8, 7] -> [(1, 2), (8, 7)]
     args.fix_bond = list(zip(args.fix_bond[::2], args.fix_bond[1::2]))
 
-    # One --target input is required for every fixed-bond pair.
+    # One --target input is required for each atom pair.
     if has_target and len(args.target) != len(args.fix_bond):
         parser.error("The number of --target values must equal the number of fixed bonds")
 
@@ -217,20 +218,6 @@ def resolve_weights(weights_arg):
     print(f"Predownloaded check point file will be used: {weights_path}")
     return weights_path
 
-def notify_user(args):
-    print(f"Using device: {args.device}")
-    print(f"Using precision: {args.precision}")
-    weights_path = resolve_weights(args.weights)
-    input_path = Path(args.input).resolve()
-    output_dir = Path.cwd()
-    if not input_path.exists():
-        parser.error(f"Input file does not exist: {input_path}")
-    if input_path.suffix.lower() != ".xyz":
-        parser.error("Input file must have a .xyz extension")
-    opt_filename = f"{input_path.stem}_opt{input_path.suffix}"
-    opt_path = output_dir / opt_filename
-    return input_path, opt_path, weights_path
-
 def check_cpu_environment():
     """Report Linux status and OpenMP/MKL thread-variable status."""
     if platform.system() != "Linux":
@@ -255,6 +242,24 @@ def check_cpu_environment():
         else:
             print("They are not equal to each other.")
 
+def notify_user(args):
+    print(f"Using device: {args.device}")
+    if args.device == "cpu":
+        check_cpu_environment()
+    print(f"Using precision: {args.precision}")
+    if args.fix_bond is not None:
+        print("Geometry optimization will be performed with the constraints specified by the user.")
+    weights_path = resolve_weights(args.weights)
+    input_path = Path(args.input).resolve()
+    output_dir = Path.cwd()
+    if not input_path.exists():
+        parser.error(f"Input file does not exist: {input_path}")
+    if input_path.suffix.lower() != ".xyz":
+        parser.error("Input file must have a .xyz extension")
+    opt_filename = f"{input_path.stem}_opt{input_path.suffix}"
+    opt_path = output_dir / opt_filename
+    return input_path, opt_path, weights_path
+
 def set_calculator(device, precision, weights_path):
     if weights_path is None:
         orbff, atoms_adapter = pretrained.orbmol_v2(device=device, precision=precision)
@@ -268,6 +273,47 @@ def set_atoms(input_path, charge, multiplicity, calc):
     atoms.info["spin"] = multiplicity
     atoms.calc = calc
     return atoms
+
+def validate_bond_atom_indices(atoms, constraint_pairs, parser):
+    """
+    Ensure every atom index in --fix_bond exists in the ASE Atoms object.
+
+    Parameters
+    ----------
+    atoms : ase.Atoms
+        Molecular structure under investigation.
+
+    constraint_pairs : list[tuple[int, int]] | None
+        For example: [(1, 2), (8, 7)].
+        None means --fix_bond was not supplied.
+
+    parser : argparse.ArgumentParser
+        Used to display a standard command-line error message.
+
+    Returns
+    -------
+    None
+    """
+    # No --fix_bond was supplied, so no atom indices need validation.
+    if constraint_pairs is None:
+        return
+
+    number_of_atoms = len(atoms)
+
+    # Flatten [(1, 2), (8, 7)] into [1, 2, 8, 7].
+    bond_indices = [
+        atom_index
+        for bond_pair in constraint_pairs
+        for atom_index in bond_pair
+    ]
+
+    largest_index = max(bond_indices)
+
+    if largest_index > number_of_atoms:
+        parser.error(
+            f"Atom index {largest_index} in --fix_bond exceeds the number "
+            f"of atoms in the system ({number_of_atoms})"
+        )
 
 def extract_energies_and_fmax(traj_path, iblock):
     frames = read(traj_path, index=":")
@@ -293,12 +339,27 @@ def initialize_csv(csv_path):
         writer = csv.writer(file)
         writer.writerow(["step", "dE", "fmax"])
 
-def make_sella_optimizer(atoms, constraint_pairs=None, target_list=None, traj_path):
+def to_zero_based(indices):
+    """
+    Change the indexing of atom pairs from one-based indexing to zero-based 
+    indexing.
+
+    Args:
+      indices (list[tuple[int, int]]): one-based atom pairs
+
+    Returns:
+      zero-based atom pairs
+    """
+    return [(i - 1, j - 1) for i, j in indices]
+
+def set_sella_optimizer(atoms, traj_path, constraint_pairs=None, target_list=None):
     """
     Create a Sella geometry optimizer.
 
     Args:
-      atoms (ase.Atoms): The species under investigation
+      atoms (ase.Atoms): The molecule to be optimized
+      traj_path (path object): A file with its extension being traj which 
+      stores the process of geometry optimization
       constraint_pairs (list[tuple[int, int]]): atom pairs of fixed bond
       target_list (list[float | str]): If the element is a float number, the 
       bond distance will be changed to that value in Anstrom during geometry
@@ -306,21 +367,23 @@ def make_sella_optimizer(atoms, constraint_pairs=None, target_list=None, traj_pa
       same value.
 
     Returns:
-      Sella: A Sella optimizer
+      Sella optimizer
     """
-    # No --fix_bond: normal geometry optimization.
+    # The user does not supply any "--fix_bond" argument. Geometry optimization
+    # will be performed without constraints.
     if constraint_pairs is None:
         return Sella(atoms, order=0, internal=True, trajectory=traj_path)
 
     cons = Constraints(atoms)
-
-    # --fix_bond was supplied but --target was omitted.
-    # Fix all specified bonds at their initial lengths.
+    # Sella requires zero-based indexing of atom pairs while the atom pairs 
+    # supplied by the user has one-based indexing.
+    constraint_pairs = to_zero_based(constraint_pairs)
+    # The user supplies "--fix_bond" argument without "--target" argument.
     if target_list is None:
         for bond in constraint_pairs:
             cons.fix_bond(bond)
 
-    # --target was supplied.
+    # The user supplies "--fix_bond" argument along with "--target" argument.
     else:
         for bond, target in zip(constraint_pairs, target_list):
             if target == "C":
@@ -328,6 +391,7 @@ def make_sella_optimizer(atoms, constraint_pairs=None, target_list=None, traj_pa
             else:
                 cons.fix_bond(bond, target=target)
 
+    # Geometry optimization will be performed with constraints.
     return Sella(atoms, order=0, constraints=cons, trajectory=traj_path)
 
 def write_csv(start_step, dE_block, fmax_block, csv_path):
@@ -376,7 +440,7 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
     for iblock in range(nblocks):
         intermediate_path = opt_path.with_name(f"{opt_path.stem}_{iblock:04d}.traj")
         tighter_fmax = fmax_threshold / 10.0
-        opt = Sella(atoms, order=0, internal=True, trajectory=os.fspath(intermediate_path))
+        opt = set_sella_optimizer(atoms, traj_path=os.fspath(intermediate_path), constraint_pairs=None, target_list=None)
         opt.run(fmax=tighter_fmax, steps=steps_per_block)
 
         energies_block, fmax_block = extract_energies_and_fmax(intermediate_path, iblock)
@@ -428,10 +492,13 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
     write(opt_path, atoms, format='xyz')
     return dE, fmax_history, last_energy
 
-def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_threshold, maxcycles):
+def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_threshold, maxcycles, constraint_pairs, target_list):
     intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
-    opt = Sella(atoms, order=0, internal=True, trajectory=os.fspath(intermediate_path))
-    opt.run(fmax=fmax_threshold, steps=maxcycles)
+    opt = set_sella_optimizer(atoms, traj_path=os.fspath(intermediate_path), constraint_pairs=constraint_pairs, target_list=target_list)
+    if constraint_pairs is None:
+        opt.run(fmax=fmax_threshold, steps=maxcycles)
+    else:
+        opt.run(fmax=1e-3, steps=300)
 
     energies, fmax_list = extract_energies_and_fmax(intermediate_path, 1)
     last_energy = None
@@ -444,7 +511,7 @@ def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_thr
         dE.append(energy_change)
         last_energy = energy
 
-    if output_trajectory:
+    if output_trajectory or constraint_pairs is not None:
         trj_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_trj.xyz")
         images = read(intermediate_path, index=":")
         write(trj_path, images)
@@ -455,10 +522,9 @@ def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_thr
 def main():
     args = parse_args()
     input_path, opt_path, weights_path = notify_user(args)
-    if args.device == "cpu":
-        check_cpu_environment()
     calc = set_calculator(args.device, args.precision, weights_path)
     atoms = set_atoms(input_path, args.charge, args.multiplicity, calc)
+    validate_bond_atom_indices(atoms=atoms, constraint_pairs=args.fix_bond, parser=parser)
 
     if args.run_consecutive_optimization:
         nblocks = args.maxcycles // args.steps_per_block
@@ -468,7 +534,7 @@ def main():
         steps = len(fmax_history) - 1
         print(f"The final energy is {last_energy:.8f} after {steps} steps of consecutive geometry optimization.")
     else:
-        dE, fmax_list, last_energy = perform_continuous_optimization(atoms, opt_path, args.trajectory, args.fmax_threshold, args.maxcycles)
+        dE, fmax_list, last_energy = perform_continuous_optimization(atoms, opt_path, args.trajectory, args.fmax_threshold, args.maxcycles, args.fix_bond, getattr(args, "target", None))
         steps = len(fmax_list) - 1
         print(f"The final energy is {last_energy:.8f} after {steps} steps of continuous geometry optimization.")
         if args.export_csv:
