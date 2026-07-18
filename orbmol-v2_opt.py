@@ -99,8 +99,8 @@ def target_value(value):
       value (str): 'C' or bond length
 
     Returns:
-        'C' for a bond length retaining current value
-        float for an explicitly specified bond length
+      'C' for a bond length retaining current value
+      float for an explicitly specified bond length
     """
     if value == "C":
         return "C"
@@ -293,6 +293,42 @@ def initialize_csv(csv_path):
         writer = csv.writer(file)
         writer.writerow(["step", "dE", "fmax"])
 
+def make_sella_optimizer(atoms, constraint_pairs=None, target_list=None, traj_path):
+    """
+    Create a Sella geometry optimizer.
+
+    Args:
+      atoms (ase.Atoms): The species under investigation
+      constraint_pairs (list[tuple[int, int]]): atom pairs of fixed bond
+      target_list (list[float | str]): If the element is a float number, the 
+      bond distance will be changed to that value in Anstrom during geometry
+      optimization. If the element is 'C', the bond distance will remain the 
+      same value.
+
+    Returns:
+      Sella: A Sella optimizer
+    """
+    # No --fix_bond: normal geometry optimization.
+    if constraint_pairs is None:
+        return Sella(atoms, order=0, internal=True, trajectory=traj_path)
+
+    cons = Constraints(atoms)
+
+    # --fix_bond was supplied but --target was omitted.
+    # Fix all specified bonds at their initial lengths.
+    if target_list is None:
+        for bond in constraint_pairs:
+            cons.fix_bond(bond)
+
+    # --target was supplied.
+    else:
+        for bond, target in zip(constraint_pairs, target_list):
+            if target == "C":
+                cons.fix_bond(bond)
+            else:
+                cons.fix_bond(bond, target=target)
+
+    return Sella(atoms, order=0, constraints=cons, trajectory=traj_path)
 
 def write_csv(start_step, dE_block, fmax_block, csv_path):
     with open(csv_path, "a", newline="") as file:
