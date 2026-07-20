@@ -133,6 +133,10 @@ def build_parser():
     return parser
 
 def validate_dependencies_in_consecutive_optimization(args, parser):
+    """
+    This function forbids the user from abusing some setting of the 
+    experimental feature named consecutive optimization.
+    """
     steps_specified = hasattr(args, "steps_per_block")
     energy_specified = hasattr(args, "energy_change_threshold")
     nde_specified = hasattr(args, "nde_check")
@@ -148,7 +152,8 @@ def apply_defaults_in_consecutive_optimization(args):
     """
     Set the number of steps per block for running consecutive geometry 
     optimization to 10. Set the threshold for energy change in consecutive 
-    geometry optimization to 3e-5.
+    geometry optimization to 3e-5. Set the number of steps used for checking 
+    energy change convergence to 3.
     """
     if not hasattr(args, "steps_per_block"):
         args.steps_per_block = 10
@@ -158,6 +163,10 @@ def apply_defaults_in_consecutive_optimization(args):
         args.nde_check = 3
 
 def validate_values(args, parser):
+    """
+    This function forbids the user from wrongly setting some parameters for 
+    geometry optimization.
+    """
     if args.maxcycles <= 0:
         parser.error("--maxcycles must be greater than 0")
     if args.steps_per_block <= 1:
@@ -207,6 +216,16 @@ def check_cpu_environment():
             print("They are not equal to each other.")
 
 def resolve_weights(weights_arg):
+    """
+    This function determines whether predownloaded check point file will be 
+    used.
+
+    Args:
+      weights_arg (str): path to the predownloaded check point file
+
+    Returns:
+      path object
+    """
     if weights_arg is None:
         print("No --weights or -w argument is provided. The program might need to download check point file.")
         return None
@@ -221,6 +240,10 @@ def resolve_weights(weights_arg):
     return weights_path
 
 def notify_user(args):
+    """
+    This function notifies the user about some settings of the calculation to 
+    be performed.
+    """
     print(f"Using device: {args.device}")
     if args.device == "cpu":
         check_cpu_environment()
@@ -250,8 +273,8 @@ def validate_constraints(args, parser):
     has_fix_bond = args.fix_bond is not None
     has_target = hasattr(args, "target")
 
-    # The user cannot supply "--target" argument without supply "--fix_bond" 
-    # argument.
+    # The user cannot supply "--target" argument without supplying 
+    # "--fix_bond" argument.
     if has_target and not has_fix_bond:
         parser.error("--target can only be specified together with --fix_bond")
 
@@ -266,7 +289,7 @@ def validate_constraints(args, parser):
     number_of_bonds = len(args.fix_bond) // 2
 
     # One --target input is required for each atom pair.
-    if has_target and len(args.target) != len(args.fix_bond):
+    if has_target and len(args.target) != number_of_bonds:
         parser.error(
             "The number of --target values must equal the number "
             "of fixed bonds"
@@ -281,9 +304,8 @@ def validate_bond_atom_indices(number_of_atoms, atom_indices, argument_name, par
     Args:
       number_of_atoms (int): The number of atoms in the system under 
       investigation.
-      atom_indices (list[int]): Raw atom indices from a command-line argument, 
-      for example: [1, 2, 8, 7]. None means that the corresponding argument was
-      not supplied.
+      atom_indices (list[int]): One-based atom indices supplied by the user.
+      None means that the corresponding argument was not supplied.
       argument_name (str): Name shown in error messages.
       parser (argparse.ArgumentParser): Used for standard argparse-style error 
       messages.
@@ -291,7 +313,7 @@ def validate_bond_atom_indices(number_of_atoms, atom_indices, argument_name, par
     if atom_indices is None:
         return
 
-    largest_index = max(bond_indices)
+    largest_index = max(atom_indices)
 
     if largest_index > number_of_atoms:
         parser.error(
@@ -300,6 +322,17 @@ def validate_bond_atom_indices(number_of_atoms, atom_indices, argument_name, par
         )
 
 def set_calculator(device, precision, weights_path):
+    """
+    This functions sets a calculator compatible with ASE.
+    
+    Args:
+      device (str): "cpu" or "cuda"
+      precision (str): "float32-high", "float32-highest", or "float64"
+      weights_path (path object): path to the predownloaded check point file
+
+    Returns:
+      an ASE-compatible calculator
+    """
     if weights_path is None:
         orbff, atoms_adapter = pretrained.orbmol_v2(device=device, precision=precision)
     else:
@@ -307,6 +340,19 @@ def set_calculator(device, precision, weights_path):
     return ORBCalculator(orbff, atoms_adapter=atoms_adapter, device=device)
 
 def set_atoms(input_path, charge, multiplicity, calc):
+    """
+    This function reads the user-specified xyz file and sets the charge and 
+    multiplicity.
+
+    Args:
+      input_path (path object): A path to the xyz file
+      charge (int): Net charge of the molecule
+      multiplicity (int): Multiplicity of the molecule
+      calc: Calculator
+
+    Returns:
+      The molecule to be optimized
+    """
     atoms = read(input_path, format='xyz')
     atoms.info["charge"] = charge
     atoms.info["spin"] = multiplicity
@@ -323,7 +369,7 @@ def one_based_to_zero_based(atom_indices):
     Convert one-based atom indices to zero-based atom indices.
 
     Args:
-      indices (list[int]): One-based indices
+      indices (list[int]): One-based atom indices
 
     Returns:
       zero-based atom indices
@@ -381,6 +427,21 @@ def set_sella_optimizer(atoms, traj_path, fixed_bond_pairs=None, target_list=Non
     return Sella(atoms, order=0, constraints=cons, trajectory=traj_path)
 
 def extract_energies_and_fmax(traj_path, iblock):
+    """
+    This function read a file with its extension being traj and outputs 
+    energies along with maximum force acting on any atom of the system under 
+    investigation.
+
+    Args:
+      traj_path (path object): A file with its extension being traj which 
+      stores the process of geometry optimization
+      iblock (int): If it is zero, then the first frame will be processed. If 
+      is greater than zero, then the first frame will be discarded.
+
+    Returns:
+      energies (list[float]): list of energy
+      fmax_list (list[float]): list of maximum force acting on any atom
+    """
     frames = read(traj_path, index=":")
     energies = []
     fmax_list = []
@@ -400,6 +461,18 @@ def extract_energies_and_fmax(traj_path, iblock):
     return energies, fmax_list
 
 def write_csv(start_step, dE_block, fmax_block, csv_path):
+    """
+    This function exports the process of geometry optimization to a csv file.
+
+    Args:
+      start_step (int): Zero-based index for the step of geometry optimization
+      dE_block (list[float | str]): If the element is "N/A", then the 
+      corresponding step should be the first step in geometry optimization. If 
+      the element is a float number, it should be the energy change in geometry
+      optimization.
+      fmax_block (list[float]): List of maximum force acting on any atom
+      csv_path (path object): path to the csv file being written      
+    """
     with open(csv_path, "a", newline="") as file:
         writer = csv.writer(file)
         for i, (de, fmax) in enumerate(zip(dE_block, fmax_block)):
@@ -408,6 +481,26 @@ def write_csv(start_step, dE_block, fmax_block, csv_path):
             writer.writerow([start_step + i, de_out, fmax_out])
 
 def check_energy_force_convergence(dE_block, fmax_block, energy_change_threshold, fmax_threshold, nde_check):
+    """
+    This function tells whether the consecutive geometry optimization has 
+    reached convergence. The absolute values of the energy changes in the last 
+    three steps should be smaller than certain value and the maximum force 
+    acting on any atom in the last step should be smaller than certain value.
+    
+    Args:
+      dE_block (list[float | str]): If the element is "N/A", then the 
+      corresponding step should be the first step in geometry optimization. If 
+      the element is a float number, it should be the energy change in geometry
+      optimization.
+      fmax_block (list[float]): List of maximum force acting on any atom
+      energy_change_threshold (float): The threshold for energy changes in the last 
+      several steps. The default value is 3e-5 in consecutive geometry 
+      optimization.
+      fmax_threshold (float): Threshold for maximum force acting on any atom. 
+      The default value is 0.01 in consecutive geometry optimization.
+      nde_check (int): The number of steps used for checking energy change 
+      convergence in geometry optimization. The default value is 3.
+    """
     last_dE_values = dE_block[-nde_check:]
 
     return (
@@ -416,6 +509,20 @@ def check_energy_force_convergence(dE_block, fmax_block, energy_change_threshold
     )
 
 def combine_xyz_files(opt_path, iblock):
+    """
+    This functions combines multiple xyz files into one xyz file. This function
+    is used in consecutive geometry optimization where the process of geometry 
+    optimization is generated block by block, which results in multiple xyz 
+    files.
+
+    Args:
+      opt_path (path object): Path to the xyz file storing the optimized 
+      geometry
+      iblock (int): number of xyz files to be combined minus one
+
+    Returns:
+      a path object of the generated xyz file
+    """
     base = opt_path.stem.removesuffix("_opt")
     merged = opt_path.with_name(f"{base}_trj_0000.xyz")
     final_path = opt_path.with_name(f"{base}_trj.xyz")
@@ -528,7 +635,7 @@ def main():
     parser, args = parse_args()
     input_path, number_of_atoms, opt_path, weights_path = notify_user(args)
     args = validate_constraints(args, parser)
-    validate_bond_atom_indices(number_of_atoms=number_of_atoms, atom_indices=args.fix_bond, argument_name="--fix_bond", parser=parser):
+    validate_bond_atom_indices(number_of_atoms=number_of_atoms, atom_indices=args.fix_bond, argument_name="--fix_bond", parser=parser)
     calc = set_calculator(args.device, args.precision, weights_path)
     atoms = set_atoms(input_path, args.charge, args.multiplicity, calc)
 
