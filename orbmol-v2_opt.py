@@ -145,6 +145,11 @@ def validate_dependencies_in_consecutive_optimization(args, parser):
         parser.error("--nde_check requires --run_consecutive_optimization")
 
 def apply_defaults_in_consecutive_optimization(args):
+    """
+    Set the number of steps per block for running consecutive geometry 
+    optimization to 10. Set the threshold for energy change in consecutive 
+    geometry optimization to 3e-5.
+    """
     if not hasattr(args, "steps_per_block"):
         args.steps_per_block = 10
     if not hasattr(args, "energy_change_threshold"):
@@ -166,57 +171,16 @@ def validate_values(args, parser):
     if args.nde_check > args.steps_per_block:
         parser.error("--nde_check must be smaller than or equal to --steps_per_block")
 
-def constraints(args, parser):
-    """Validate and convert constraint-related arguments."""
-    has_fix_bond = args.fix_bond is not None
-    has_target = hasattr(args, "target")
-
-    # The user cannot supply "--target" argument without supply "--fix_bond" 
-    # argument.
-    if has_target and not has_fix_bond:
-        parser.error("--target can only be specified together with --fix_bond")
-
-    # The user does not supply any "--fix_bond" argument.
-    if not has_fix_bond:
-        return args
-
-    # --fix_bond must contain complete atom pairs.
-    if len(args.fix_bond) % 2 != 0:
-        parser.error("The last atom does not have bond specified")
-
-    # [1, 2, 8, 7] -> [(1, 2), (8, 7)]
-    args.fix_bond = list(zip(args.fix_bond[::2], args.fix_bond[1::2]))
-
-    # One --target input is required for each atom pair.
-    if has_target and len(args.target) != len(args.fix_bond):
-        parser.error("The number of --target values must equal the number of fixed bonds")
-
-    return args
-
 def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
     validate_dependencies_in_consecutive_optimization(args, parser)
     apply_defaults_in_consecutive_optimization(args)
+
     validate_values(args, parser)
-    args = constraints(args, parser)
 
-    return args
-
-def resolve_weights(weights_arg):
-    if weights_arg is None:
-        print("No --weights or -w argument is provided. The program might need to download check point file.")
-        return None
-
-    weights_path = Path(weights_arg).resolve()
-
-    if not weights_path.is_file():
-        print(f"Error: invalid checkpoint file path: {weights_path}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Predownloaded check point file will be used: {weights_path}")
-    return weights_path
+    return parser, args
 
 def check_cpu_environment():
     """Report Linux status and OpenMP/MKL thread-variable status."""
@@ -242,6 +206,20 @@ def check_cpu_environment():
         else:
             print("They are not equal to each other.")
 
+def resolve_weights(weights_arg):
+    if weights_arg is None:
+        print("No --weights or -w argument is provided. The program might need to download check point file.")
+        return None
+
+    weights_path = Path(weights_arg).resolve()
+
+    if not weights_path.is_file():
+        print(f"Error: invalid checkpoint file path: {weights_path}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Predownloaded check point file will be used: {weights_path}")
+    return weights_path
+
 def notify_user(args):
     print(f"Using device: {args.device}")
     if args.device == "cpu":
@@ -249,16 +227,77 @@ def notify_user(args):
     print(f"Using precision: {args.precision}")
     if args.fix_bond is not None:
         print("Geometry optimization will be performed with the constraints specified by the user.")
-    weights_path = resolve_weights(args.weights)
+
     input_path = Path(args.input).resolve()
-    output_dir = Path.cwd()
     if not input_path.exists():
         parser.error(f"Input file does not exist: {input_path}")
     if input_path.suffix.lower() != ".xyz":
         parser.error("Input file must have a .xyz extension")
+    with input_path.open("r", encoding="utf-8") as xyz_file:
+        number_of_atoms = int(xyz_file.readline().strip())
+    print(f"The system under investigation has {number_of_atoms} atoms")
+
+    output_dir = Path.cwd()
     opt_filename = f"{input_path.stem}_opt{input_path.suffix}"
     opt_path = output_dir / opt_filename
-    return input_path, opt_path, weights_path
+
+    weights_path = resolve_weights(args.weights)
+
+    return input_path, number_of_atoms, opt_path, weights_path
+
+def validate_constraints(args, parser):
+    """Validate constraint-related arguments."""
+    has_fix_bond = args.fix_bond is not None
+    has_target = hasattr(args, "target")
+
+    # The user cannot supply "--target" argument without supply "--fix_bond" 
+    # argument.
+    if has_target and not has_fix_bond:
+        parser.error("--target can only be specified together with --fix_bond")
+
+    # The user does not supply any "--fix_bond" argument.
+    if not has_fix_bond:
+        return args
+
+    # --fix_bond must contain complete atom pairs.
+    if len(args.fix_bond) % 2 != 0:
+        parser.error("The last atom in --fix_bond does not have bond specified")
+
+    number_of_bonds = len(args.fix_bond) // 2
+
+    # One --target input is required for each atom pair.
+    if has_target and len(args.target) != len(args.fix_bond):
+        parser.error(
+            "The number of --target values must equal the number "
+            "of fixed bonds"
+        )
+
+    return args
+
+def validate_bond_atom_indices(number_of_atoms, atom_indices, argument_name, parser):
+    """
+    Ensure that atom indices supplied by the user exist in atoms.
+
+    Args:
+      number_of_atoms (int): The number of atoms in the system under 
+      investigation.
+      atom_indices (list[int]): Raw atom indices from a command-line argument, 
+      for example: [1, 2, 8, 7]. None means that the corresponding argument was
+      not supplied.
+      argument_name (str): Name shown in error messages.
+      parser (argparse.ArgumentParser): Used for standard argparse-style error 
+      messages.
+    """
+    if atom_indices is None:
+        return
+
+    largest_index = max(bond_indices)
+
+    if largest_index > number_of_atoms:
+        parser.error(
+            f"Atom index {largest_index} in {argument_name} exceeds "
+            f"the number of atoms in the system ({number_of_atoms})"
+        )
 
 def set_calculator(device, precision, weights_path):
     if weights_path is None:
@@ -274,46 +313,72 @@ def set_atoms(input_path, charge, multiplicity, calc):
     atoms.calc = calc
     return atoms
 
-def validate_bond_atom_indices(atoms, constraint_pairs, parser):
+def initialize_csv(csv_path):
+    with open(csv_path, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["step", "dE", "fmax"])
+
+def one_based_to_zero_based(atom_indices):
     """
-    Ensure every atom index in --fix_bond exists in the ASE Atoms object.
+    Convert one-based atom indices to zero-based atom indices.
 
-    Parameters
-    ----------
-    atoms : ase.Atoms
-        Molecular structure under investigation.
+    Args:
+      indices (list[int]): One-based indices
 
-    constraint_pairs : list[tuple[int, int]] | None
-        For example: [(1, 2), (8, 7)].
-        None means --fix_bond was not supplied.
-
-    parser : argparse.ArgumentParser
-        Used to display a standard command-line error message.
-
-    Returns
-    -------
-    None
+    Returns:
+      zero-based atom indices
     """
-    # No --fix_bond was supplied, so no atom indices need validation.
-    if constraint_pairs is None:
-        return
+    if atom_indices is None:
+        return None
 
-    number_of_atoms = len(atoms)
+    return [atom_index - 1 for atom_index in atom_indices]
 
-    # Flatten [(1, 2), (8, 7)] into [1, 2, 8, 7].
-    bond_indices = [
-        atom_index
-        for bond_pair in constraint_pairs
-        for atom_index in bond_pair
-    ]
+def set_sella_optimizer(atoms, traj_path, fixed_bond_pairs=None, target_list=None):
+    """
+    Create a Sella geometry optimizer.
 
-    largest_index = max(bond_indices)
+    Args:
+      atoms (ase.Atoms): The molecule to be optimized
+      traj_path (path object): A file with its extension being traj which 
+      stores the process of geometry optimization
+      fixed_bond_pairs (list[int]): atom pairs of fixed bond
+      target_list (list[float | str]): If the element is a float number, the 
+      bond distance will be changed to that value in Anstrom during geometry
+      optimization. If the element is 'C', the bond distance will remain the 
+      same value.
 
-    if largest_index > number_of_atoms:
-        parser.error(
-            f"Atom index {largest_index} in --fix_bond exceeds the number "
-            f"of atoms in the system ({number_of_atoms})"
-        )
+    Returns:
+      Sella optimizer
+    """
+    # The user does not supply any "--fix_bond" argument. Geometry optimization
+    # will be performed without constraints.
+    if fixed_bond_pairs is None:
+        return Sella(atoms, order=0, internal=True, trajectory=traj_path)
+
+    cons = Constraints(atoms)
+    # Sella requires zero-based indexing of atom pairs while the atom pairs 
+    # supplied by the user has one-based indexing.
+    zero_based_indices = one_based_to_zero_based(fixed_bond_pairs)
+    constraint_pairs = None
+    if zero_based_indices is not None:
+        constraint_pairs = list(
+            zip(zero_based_indices[::2], zero_based_indices[1::2])
+        )  
+    # The user supplies "--fix_bond" argument without "--target" argument.
+    if target_list is None:
+        for bond in constraint_pairs:
+            cons.fix_bond(bond)
+
+    # The user supplies "--fix_bond" argument along with "--target" argument.
+    else:
+        for bond, target in zip(constraint_pairs, target_list):
+            if target == "C":
+                cons.fix_bond(bond)
+            else:
+                cons.fix_bond(bond, target=target)
+
+    # Geometry optimization will be performed with constraints.
+    return Sella(atoms, order=0, constraints=cons, trajectory=traj_path)
 
 def extract_energies_and_fmax(traj_path, iblock):
     frames = read(traj_path, index=":")
@@ -333,66 +398,6 @@ def extract_energies_and_fmax(traj_path, iblock):
         del fmax_list[0]
 
     return energies, fmax_list
-
-def initialize_csv(csv_path):
-    with open(csv_path, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["step", "dE", "fmax"])
-
-def to_zero_based(indices):
-    """
-    Change the indexing of atom pairs from one-based indexing to zero-based 
-    indexing.
-
-    Args:
-      indices (list[tuple[int, int]]): one-based atom pairs
-
-    Returns:
-      zero-based atom pairs
-    """
-    return [(i - 1, j - 1) for i, j in indices]
-
-def set_sella_optimizer(atoms, traj_path, constraint_pairs=None, target_list=None):
-    """
-    Create a Sella geometry optimizer.
-
-    Args:
-      atoms (ase.Atoms): The molecule to be optimized
-      traj_path (path object): A file with its extension being traj which 
-      stores the process of geometry optimization
-      constraint_pairs (list[tuple[int, int]]): atom pairs of fixed bond
-      target_list (list[float | str]): If the element is a float number, the 
-      bond distance will be changed to that value in Anstrom during geometry
-      optimization. If the element is 'C', the bond distance will remain the 
-      same value.
-
-    Returns:
-      Sella optimizer
-    """
-    # The user does not supply any "--fix_bond" argument. Geometry optimization
-    # will be performed without constraints.
-    if constraint_pairs is None:
-        return Sella(atoms, order=0, internal=True, trajectory=traj_path)
-
-    cons = Constraints(atoms)
-    # Sella requires zero-based indexing of atom pairs while the atom pairs 
-    # supplied by the user has one-based indexing.
-    constraint_pairs = to_zero_based(constraint_pairs)
-    # The user supplies "--fix_bond" argument without "--target" argument.
-    if target_list is None:
-        for bond in constraint_pairs:
-            cons.fix_bond(bond)
-
-    # The user supplies "--fix_bond" argument along with "--target" argument.
-    else:
-        for bond, target in zip(constraint_pairs, target_list):
-            if target == "C":
-                cons.fix_bond(bond)
-            else:
-                cons.fix_bond(bond, target=target)
-
-    # Geometry optimization will be performed with constraints.
-    return Sella(atoms, order=0, constraints=cons, trajectory=traj_path)
 
 def write_csv(start_step, dE_block, fmax_block, csv_path):
     with open(csv_path, "a", newline="") as file:
@@ -492,10 +497,10 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
     write(opt_path, atoms, format='xyz')
     return dE, fmax_history, last_energy
 
-def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_threshold, maxcycles, constraint_pairs, target_list):
-    intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
-    opt = set_sella_optimizer(atoms, traj_path=os.fspath(intermediate_path), constraint_pairs=constraint_pairs, target_list=target_list)
-    if constraint_pairs is None:
+def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_threshold, maxcycles, fixed_bond_pairs, target_list):
+    intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")    
+    opt = set_sella_optimizer(atoms=atoms, traj_path=os.fspath(intermediate_path), fixed_bond_pairs=fixed_bond_pairs, target_list=target_list)
+    if fixed_bond_pairs is None:
         opt.run(fmax=fmax_threshold, steps=maxcycles)
     else:
         opt.run(fmax=1e-3, steps=300)
@@ -511,7 +516,7 @@ def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_thr
         dE.append(energy_change)
         last_energy = energy
 
-    if output_trajectory or constraint_pairs is not None:
+    if output_trajectory or fixed_bond_pairs is not None:
         trj_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_trj.xyz")
         images = read(intermediate_path, index=":")
         write(trj_path, images)
@@ -520,11 +525,12 @@ def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_thr
     return dE, fmax_list, last_energy
 
 def main():
-    args = parse_args()
-    input_path, opt_path, weights_path = notify_user(args)
+    parser, args = parse_args()
+    input_path, number_of_atoms, opt_path, weights_path = notify_user(args)
+    args = validate_constraints(args, parser)
+    validate_bond_atom_indices(number_of_atoms=number_of_atoms, atom_indices=args.fix_bond, argument_name="--fix_bond", parser=parser):
     calc = set_calculator(args.device, args.precision, weights_path)
     atoms = set_atoms(input_path, args.charge, args.multiplicity, calc)
-    validate_bond_atom_indices(atoms=atoms, constraint_pairs=args.fix_bond, parser=parser)
 
     if args.run_consecutive_optimization:
         nblocks = args.maxcycles // args.steps_per_block
