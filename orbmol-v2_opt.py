@@ -44,7 +44,9 @@ several blocks of geometry optimization:
 Advanced usage with bond constraints:
 When any bond constraint is specified, the process of geometry optimization 
 will be preserved by default. Only one-based indexing of atoms is allowed when 
-sepecifying bond constraints.
+sepecifying bond constraints. The threshold for maximum force acting on any 
+atom in this case is 1e-3 instead of the default 0.01. The maximum steps of 
+geometry optimization in this case is 250 instead of the default 1000. 
 Constrain the bond between atom 1 and atom 2:
   python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2
 Constrain the bond between atom 1 and atom 2 to 1.5 Angstrom:
@@ -324,7 +326,7 @@ def validate_bond_atom_indices(number_of_atoms, atom_indices, argument_name, par
 def set_calculator(device, precision, weights_path):
     """
     This functions sets a calculator compatible with ASE.
-    
+
     Args:
       device (str): "cpu" or "cuda"
       precision (str): "float32-high", "float32-highest", or "float64"
@@ -409,7 +411,7 @@ def set_sella_optimizer(atoms, traj_path, fixed_bond_pairs=None, target_list=Non
     if zero_based_indices is not None:
         constraint_pairs = list(
             zip(zero_based_indices[::2], zero_based_indices[1::2])
-        )  
+        )
     # The user supplies "--fix_bond" argument without "--target" argument.
     if target_list is None:
         for bond in constraint_pairs:
@@ -436,7 +438,7 @@ def extract_energies_and_fmax(traj_path, iblock):
       traj_path (path object): A file with its extension being traj which 
       stores the process of geometry optimization
       iblock (int): If it is zero, then the first frame will be processed. If 
-      is greater than zero, then the first frame will be discarded.
+      it is greater than zero, then the first frame will be discarded.
 
     Returns:
       energies (list[float]): list of energy
@@ -471,7 +473,7 @@ def write_csv(start_step, dE_block, fmax_block, csv_path):
       the element is a float number, it should be the energy change in geometry
       optimization.
       fmax_block (list[float]): List of maximum force acting on any atom
-      csv_path (path object): path to the csv file being written      
+      csv_path (path object): path to the csv file being written
     """
     with open(csv_path, "a", newline="") as file:
         writer = csv.writer(file)
@@ -486,7 +488,7 @@ def check_energy_force_convergence(dE_block, fmax_block, energy_change_threshold
     reached convergence. The absolute values of the energy changes in the last 
     three steps should be smaller than certain value and the maximum force 
     acting on any atom in the last step should be smaller than certain value.
-    
+
     Args:
       dE_block (list[float | str]): If the element is "N/A", then the 
       corresponding step should be the first step in geometry optimization. If 
@@ -605,12 +607,12 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
     return dE, fmax_history, last_energy
 
 def perform_continuous_optimization(atoms, opt_path, output_trajectory, fmax_threshold, maxcycles, fixed_bond_pairs, target_list):
-    intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")    
+    intermediate_path = opt_path.with_name(opt_path.name[:-len("_opt.xyz")] + "_opt.traj")
     opt = set_sella_optimizer(atoms=atoms, traj_path=os.fspath(intermediate_path), fixed_bond_pairs=fixed_bond_pairs, target_list=target_list)
     if fixed_bond_pairs is None:
         opt.run(fmax=fmax_threshold, steps=maxcycles)
     else:
-        opt.run(fmax=1e-3, steps=300)
+        opt.run(fmax=1e-3, steps=250)
 
     energies, fmax_list = extract_energies_and_fmax(intermediate_path, 1)
     last_energy = None
