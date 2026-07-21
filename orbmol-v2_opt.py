@@ -59,6 +59,9 @@ Constrain the bond between atom 1 and atom 2 while constrain the bond between
 atom 7 and atomm 8 to 1.5 Angstrom:
   python orbmol-v2_opt.py -d cpu -i input.xyz --fix_bond 1 2 7 8 --target C 1.5
 NOTE: The command above does not change the geometry immediately.
+
+The author only tested this script on python 3.13.13. The author used ase 
+3.28.0, orb-models 0.7.0, and sella 2.4.2.
 """
 
 import os
