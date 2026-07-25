@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 This script performs geometry optimization with OrbMol-v2. This script relies 
 on ase (Atomic Simulation Environment), orb-models, and sella. The user 
@@ -122,9 +123,9 @@ def build_parser():
     parser.add_argument("--device", "-d", required=True, choices=["cpu", "cuda"], help="Device to use: 'cpu' or 'cuda'")
     parser.add_argument("--precision", "-p", default="float32-high", choices=["float32-high", "float32-highest", "float64"], help="Calculation precision: 'float32-high', 'float32-highest', or 'float64' (default: float32-high)")
     parser.add_argument("--weights", "-w", type=str, help="Path to the predownloaded check point file")
-    parser.add_argument("--input", "-i", required=True, type=str, help="Path of the input xyz file")
-    parser.add_argument("--charge", "-c", default=0, type=int, help="Net charge of the molecule with the default value being zero")
-    parser.add_argument("--multiplicity", "-m", default=1, type=int, help="Multiplicity of the molecule with the default value being one")
+    parser.add_argument("--input", "-i", required=True, type=str, help="Path to the input xyz file")
+    parser.add_argument("--charge", "-c", type=int, default=0, help="Net charge of the molecule with the default value being zero")
+    parser.add_argument("--multiplicity", "-m", type=int, default=1, help="Multiplicity of the molecule with the default value being one")
     parser.add_argument("--trajectory", "-t", action="store_true", help="Once this option is specified, trajectory of geometry optimization will be outputted. If the user enforces constraint on some bond, trajectory of geometry optimization will be outputted by default even without specifying this option.")
     parser.add_argument("--export_csv", "-e", action="store_true", help="Once this option is specified, a csv file about geometry optimization will be outputted")
     parser.add_argument("--fmax_threshold", type=float, default=0.01, help="Threshold for maximum force acting on any atom of the system under investigation with the default value being 0.01. However, during geometry optimization with bond constraint, the default value will be 1e-3 and cannot be changed without editing the codes.")
