@@ -262,6 +262,8 @@ def notify_user(args):
         parser.error(f"Input file does not exist: {input_path}")
     if input_path.suffix.lower() != ".xyz":
         parser.error("Input file must have a .xyz extension")
+    if len(input_path.suffixes) > 1:
+        parser.error("Input file has more than one extension")
     with input_path.open("r", encoding="utf-8") as xyz_file:
         number_of_atoms = int(xyz_file.readline().strip())
     print(f"The system under investigation has {number_of_atoms} atoms")
