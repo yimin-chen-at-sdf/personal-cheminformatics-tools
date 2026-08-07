@@ -560,7 +560,7 @@ def perform_consecutive_optimization(atoms, opt_path, output_trajectory, fmax_th
     for iblock in range(nblocks):
         intermediate_path = opt_path.with_name(f"{opt_path.stem}_{iblock:04d}.traj")
         tighter_fmax = fmax_threshold / 10.0
-        opt = set_sella_optimizer(atoms, traj_path=os.fspath(intermediate_path), constraint_pairs=None, target_list=None)
+        opt = set_sella_optimizer(atoms, traj_path=os.fspath(intermediate_path), fixed_bond_pairs=None, target_list=None)
         opt.run(fmax=tighter_fmax, steps=steps_per_block)
 
         energies_block, fmax_block = extract_energies_and_fmax(intermediate_path, iblock)
