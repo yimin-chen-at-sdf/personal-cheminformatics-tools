@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Generate conformers from a one-record SDF file.
 
